@@ -69,7 +69,7 @@ void processPackets(pcap_t *packets){
             protocol_type = processIPInformation(data + ETHER_OFFSET);
     
         if(!strcmp(protocol_type->protocol_type,"TCP"))
-            processTCPInformation(data+protocol_type->len+ETHER_OFFSET);
+            processTCPInformation(data+protocol_type->len+ETHER_OFFSET, packet_header->len - (ETHER_OFFSET + protocol_type->len));
         
 
     }
@@ -219,7 +219,7 @@ char *returnProtocolType(const char *protocol_type_bytes){
 }
 
 
-void processTCPInformation(char *data){
+void processTCPInformation(char *data, unsigned int len){
 
     unsigned char *destination_bytes = data + 2;
     unsigned char *sequence_bytes = destination_bytes + 2;
@@ -229,6 +229,7 @@ void processTCPInformation(char *data){
     unsigned char *window_bytes = flag_bytes + 1;
     unsigned char *checksum_bytes = window_bytes + 2;
     
+
     unsigned short int source_port;
     memcpy(&source_port,data,2);
     source_port = htons(source_port);
@@ -262,6 +263,8 @@ void processTCPInformation(char *data){
     memcpy(&window,window_bytes,2);
     window = htons(window);
 
+    unsigned short checksum = in_cksum(data,len);
+
 
     printf("        TCP Header\n");
     printf("            Source Port:  %u\n",source_port);
@@ -290,7 +293,9 @@ void processTCPInformation(char *data){
     else
         printf("            ACK Flag: No\n");
 
-    printf("            Window Size: %u\n\n",window);
+    printf("            Window Size: %u\n",window);
+
+    printf("            Checksum: %d\n\n",checksum);
 
 
 }
