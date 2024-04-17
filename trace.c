@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <pcap.h>
 #include <netinet/ether.h>
+#include <sys/socket.h>
 #include <string.h>
 
 #include "checksum.h"
@@ -13,8 +14,15 @@
 void processPackets(pcap_t *);
 char *returnEtherType(char *type);
 char *processEthernetInformation(const char *);
-char *processIPInformation(const char *);
+struct offset_type*processIPInformation(const char *);
 char *returnProtocolType(const char *);
+
+struct offset_type{
+
+    int len;
+    char *protocol_type;
+
+};
 
 
 int main(int argc, char **argv){
@@ -40,6 +48,7 @@ int main(int argc, char **argv){
 
 }
 
+
 void processPackets(pcap_t *packets){ 
 
     int packet_number = 1;
@@ -53,15 +62,21 @@ void processPackets(pcap_t *packets){
         packet_number++;
 
         
-        char *type = processEthernetInformation(data);
+        char *ether_type = processEthernetInformation(data);
+        struct offset_type *protocol_type;
 
-        if(type = "IP")
-            processIPInformation(data + ETHER_OFFSET);
+        if(!strcmp(ether_type,"IP"))
+            protocol_type = processIPInformation(data + ETHER_OFFSET);
+    
+        if(!strcmp(protocol_type->protocol_type,"TCP"))
+            processTCPInformation(data+protocol_type->len+ETHER_OFFSET);
+        
 
     }
 
 
 }
+
 
 char *processEthernetInformation(const char *data){
 
@@ -96,11 +111,15 @@ char *returnEtherType(char *type){
 
 }
 
-char *processIPInformation(const char *data){
+
+struct offset_type *processIPInformation(const char *data){
 
 
     const unsigned char *TTL_bytes = data + 8;
     const unsigned char *protocol_bytes = TTL_bytes + 1;
+    const unsigned char *checksum_bytes = protocol_bytes + 1;
+    const unsigned char *source_bytes = checksum_bytes + 2;
+    const unsigned char *destination_bytes = source_bytes + 4;
 
 
     short int version = data[0];
@@ -108,18 +127,32 @@ char *processIPInformation(const char *data){
     version = (version - (len/4)) / 16;
     version = (version < 0) ? 0 : version;
 
+
     short int TOS_difserv = data[1];
     short int TOS_ECN = TOS_difserv % 16;
     TOS_difserv -= TOS_ECN;
     TOS_difserv = (TOS_difserv < 0) ? 0 : TOS_difserv;
 
+
     u_int32_t TTL = TTL_bytes[0];
+
 
     char *protocol_type = returnProtocolType(protocol_bytes);
 
 
     unsigned short int *addr = (unsigned short int *) data;
-    unsigned short int checksum = in_cksum(addr,20);
+    unsigned short int checksum_result = in_cksum(addr,len);
+
+    struct in_addr address;
+    struct in_addr address_2;
+
+    memcpy(&address.s_addr,source_bytes,4);
+    char *source = (char *)malloc(sizeof(char)*16);
+    strcpy(source,inet_ntoa(address));
+
+    memcpy(&address_2.s_addr,destination_bytes,4);
+    char *destination = (char *)malloc(sizeof(char)*16);
+    strcpy(destination,inet_ntoa(address_2));
     
 
     printf("        IP Header\n");
@@ -134,14 +167,26 @@ char *processIPInformation(const char *data){
 
     printf("            Protocol: %s\n",protocol_type);
 
-    printf("            Checksum: %d\n\n",checksum);
+    if(!checksum_result)
+        printf("            Checksum: Correct (0x%x%x)\n",checksum_bytes[0],checksum_bytes[1]);
+    else
+        printf("            Checksum: Incorrect (0x%x%x)\n",checksum_bytes[0],checksum_bytes[1]);
+
+    printf("            Sender IP: %s\n",source);
+    printf("            Dest IP: %s\n\n",destination);
 
 
+    free(source);
+    free(destination);
 
+    struct offset_type *protocol_length = (struct offset_type *)malloc(sizeof(struct offset_type));
+    protocol_length->protocol_type = protocol_type;
+    protocol_length->len = len;
 
-
+    return protocol_length;
 
 }
+
 
 char *returnProtocolType(const char *protocol_type_bytes){
 
@@ -152,23 +197,100 @@ char *returnProtocolType(const char *protocol_type_bytes){
 
 
         case 0x06:
-            protocol_type = "TCP";
+            strcpy(protocol_type, "TCP");
             break;
 
         case 0x11:
-            protocol_type = "UDP";
+            strcpy(protocol_type, "UDP");
             break;
 
         case 0x01:
-            protocol_type = "ICMP";
+            strcpy(protocol_type, "ICMP");
             break;
         
         default:
-            protocol_type = "error";
+            strcpy(protocol_type, "error");
             break;
 
     }
 
     return protocol_type;
+
+}
+
+
+void processTCPInformation(char *data){
+
+    unsigned char *destination_bytes = data + 2;
+    unsigned char *sequence_bytes = destination_bytes + 2;
+    unsigned char *ACK_bytes = sequence_bytes + 4;
+    unsigned char *offset_bytes = ACK_bytes + 4;
+    unsigned char *flag_bytes = offset_bytes + 1;
+    unsigned char *window_bytes = flag_bytes + 1;
+    unsigned char *checksum_bytes = window_bytes + 2;
+    
+    unsigned short int source_port;
+    memcpy(&source_port,data,2);
+    source_port = htons(source_port);
+
+
+    unsigned short int destination_port;
+    memcpy(&destination_port,destination_bytes,2);
+    destination_port = htons(destination_port);
+
+    
+    unsigned int sequence_number;
+    memcpy(&sequence_number,sequence_bytes,4);
+    sequence_number = htonl(sequence_number);
+
+
+    unsigned int ACK_number;
+    memcpy(&ACK_number,ACK_bytes,4);
+    ACK_number = htonl(ACK_number);
+
+
+    unsigned int data_offset = offset_bytes[0] / 4;
+
+
+    unsigned int ACK_flag = 0b00010000 & flag_bytes[0];
+    unsigned int RST_flag = 0b00000100 & flag_bytes[0];
+    unsigned int SYN_flag = 0b00000010 & flag_bytes[0];
+    unsigned int FIN_flag = 0b00000001 & flag_bytes[0];
+
+    
+    unsigned short int window;
+    memcpy(&window,window_bytes,2);
+    window = htons(window);
+
+
+    printf("        TCP Header\n");
+    printf("            Source Port:  %u\n",source_port);
+    printf("            Dest Port:  %u\n",destination_port);
+    printf("            Sequence Number: %u\n",sequence_number);
+    printf("            ACK Number: %u\n",ACK_number);
+    printf("            Data Offset (bytes): %u\n",data_offset);
+
+    if(SYN_flag)
+        printf("            SYN Flag: Yes\n");
+    else
+        printf("            SYN Flag: No\n");
+    
+    if(RST_flag)
+        printf("            RST Flag: Yes\n");
+    else
+        printf("            RST Flag: No\n");
+
+    if(FIN_flag)
+        printf("            FIN Flag: Yes\n");
+    else
+        printf("            FIN Flag: No\n");
+
+    if(ACK_flag)
+        printf("            ACK Flag: Yes\n");
+    else
+        printf("            ACK Flag: No\n");
+
+    printf("            Window Size: %u\n\n",window);
+
 
 }
