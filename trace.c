@@ -14,16 +14,28 @@
 void processPackets(pcap_t *);
 char *returnEtherType(char *type);
 char *processEthernetInformation(const char *);
-struct offset_type*processIPInformation(const char *);
+struct PseudoHeader*processIPInformation(const char *);
 char *returnProtocolType(const char *);
 
-struct offset_type{
+struct OffsetType{
 
     int len;
     char *protocol_type;
 
 };
 
+struct PseudoHeader{
+
+    unsigned int *source;
+    unsigned int *dest;
+    char fixed;
+    char protocol;
+    unsigned short int TCP_seg_length;
+
+    int len;
+    char *protocol_type;
+
+};
 
 int main(int argc, char **argv){
 
@@ -63,13 +75,17 @@ void processPackets(pcap_t *packets){
 
         
         char *ether_type = processEthernetInformation(data);
-        struct offset_type *protocol_type;
+        struct PseudoHeader *header;
 
-        if(!strcmp(ether_type,"IP"))
-            protocol_type = processIPInformation(data + ETHER_OFFSET);
+        if(!strcmp(ether_type,"IP")){
+            header = processIPInformation(data + ETHER_OFFSET);
+            header->TCP_seg_length = (packet_header->len - 14 - header->len);
+            //header->TCP_seg_length = 36;
+
+        }
     
-        if(!strcmp(protocol_type->protocol_type,"TCP"))
-            processTCPInformation(data+protocol_type->len+ETHER_OFFSET, packet_header->len - (ETHER_OFFSET + protocol_type->len));
+        if(!strcmp(header->protocol_type,"TCP"))
+            processTCPInformation(data+header->len+ETHER_OFFSET, header);
         
 
     }
@@ -112,7 +128,7 @@ char *returnEtherType(char *type){
 }
 
 
-struct offset_type *processIPInformation(const char *data){
+struct PseudoHeader *processIPInformation(const char *data){
 
 
     const unsigned char *TTL_bytes = data + 8;
@@ -147,10 +163,10 @@ struct offset_type *processIPInformation(const char *data){
     struct in_addr address_2;
 
     memcpy(&address.s_addr,source_bytes,4);
-    char *source = (char *)malloc(sizeof(char)*16);
+    char *source = (char *)malloc(sizeof(char)*4);
     strcpy(source,inet_ntoa(address));
 
-    memcpy(&address_2.s_addr,destination_bytes,4);
+    memcpy(&address_2.s_addr,destination_bytes,16);
     char *destination = (char *)malloc(sizeof(char)*16);
     strcpy(destination,inet_ntoa(address_2));
     
@@ -175,15 +191,22 @@ struct offset_type *processIPInformation(const char *data){
     printf("            Sender IP: %s\n",source);
     printf("            Dest IP: %s\n\n",destination);
 
-
     free(source);
     free(destination);
 
-    struct offset_type *protocol_length = (struct offset_type *)malloc(sizeof(struct offset_type));
-    protocol_length->protocol_type = protocol_type;
-    protocol_length->len = len;
+    struct PseudoHeader *header = (struct PseudoHeader *)malloc(sizeof(struct PseudoHeader));
+    header->protocol_type = protocol_type;
+    header->len = len;
+    header->dest = (int *)malloc(sizeof(unsigned int));
+    memcpy(header->dest,destination_bytes,4);
+    //*header->dest = htonl(*header->dest);
+    header->source = (int *)malloc(sizeof(unsigned int));
+    memcpy(header->source,source_bytes,4);
+    //*header->source = htonl(*header->source);
+    header->fixed = 0b00000000;
+    header->protocol = protocol_bytes[0];
 
-    return protocol_length;
+    return header;
 
 }
 
@@ -219,7 +242,7 @@ char *returnProtocolType(const char *protocol_type_bytes){
 }
 
 
-void processTCPInformation(char *data, unsigned int len){
+void processTCPInformation(char *data, struct PseudoHeader *header){
 
     unsigned char *destination_bytes = data + 2;
     unsigned char *sequence_bytes = destination_bytes + 2;
@@ -263,7 +286,23 @@ void processTCPInformation(char *data, unsigned int len){
     memcpy(&window,window_bytes,2);
     window = htons(window);
 
-    unsigned short checksum = in_cksum(data,len);
+    //unsigned short int *addr = (unsigned short int *) data;
+    //unsigned short checksum = in_cksum(addr,header->TCP_seg_length);
+
+    unsigned char *checking = (char *)malloc(sizeof(char)*(header->TCP_seg_length+12));
+    memcpy(checking,header->source,4);
+    memcpy(checking+4,header->dest,4);
+    memcpy(checking+8,&header->fixed,1);
+    memcpy(checking+9,&header->protocol,1);
+    //memcpy(checking+10,&header->TCP_seg_length,2);
+    //memcpy(checking+12,data,header->TCP_seg_length);
+
+   unsigned short int tcp_seg_length_net = htons(header->TCP_seg_length); // Convert to network byte order
+    memcpy(checking + 10, &tcp_seg_length_net, 2);
+    memcpy(checking + 12, data, header->TCP_seg_length);
+    
+    
+
 
 
     printf("        TCP Header\n");
@@ -295,7 +334,15 @@ void processTCPInformation(char *data, unsigned int len){
 
     printf("            Window Size: %u\n",window);
 
-    printf("            Checksum: %d\n\n",checksum);
+    for(int i=0;i<header->TCP_seg_length+12;i++)
+        printf(" 0x%x ",checking[i]);
+    printf("\n");
+    //printf("header->TCP_seg_length==%x\n\n",header->TCP_seg_length);
+
+    unsigned short int *addr = (unsigned short int *) checking;
+    unsigned short int checksum_result = in_cksum(addr, header->TCP_seg_length + 12);
+
+    printf("            checksum: %u\n\n",checksum_result);
 
 
 }
