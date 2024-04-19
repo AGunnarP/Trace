@@ -16,6 +16,10 @@ char *returnEtherType(char *type);
 char *processEthernetInformation(const char *);
 struct PseudoHeader*processIPInformation(const char *);
 char *returnProtocolType(const char *);
+void processUDPInformation(char *);
+void processARPInformation(char *);
+void processICMPInformation(char *);
+void processTCPInformation(char *, struct PseudoHeader *);
 
 struct OffsetType{
 
