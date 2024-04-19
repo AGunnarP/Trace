@@ -31,6 +31,7 @@ struct PseudoHeader{
     char fixed;
     char protocol;
     unsigned short int TCP_seg_length;
+    unsigned short int TCP_seg_length_user;
 
     int len;
     char *protocol_type;
@@ -79,20 +80,29 @@ void processPackets(pcap_t *packets){
 
         
         char *ether_type = processEthernetInformation(data);
-        struct PseudoHeader *header;
+        struct PseudoHeader *header = NULL;
 
-        if(!strcmp(ether_type,"IP")){
-
+        if(!strcmp(ether_type,"IP"))
             header = processIPInformation(data + ETHER_OFFSET);
-            header->TCP_seg_length = (packet_header->len - 14 - header->len);
-
-        }
+        else if(!strcmp(ether_type,"ARP"))
+            processARPInformation(data + ETHER_OFFSET);
     
-        if(!strcmp(header->protocol_type,"TCP"))
-            processTCPInformation(data+header->len+ETHER_OFFSET, header);
+        if(header){
+            if(!strcmp(header->protocol_type,"TCP"))
+                processTCPInformation(data+header->len+ETHER_OFFSET, header);
+            else if(!strcmp(header->protocol_type,"ICMP"))
+                processICMPInformation(data+header->len+ETHER_OFFSET);
+            else if(!strcmp(header->protocol_type,"UDP"))
+                processUDPInformation(data+header->len+ETHER_OFFSET);
+        }
         
-        
-        
+        free(ether_type);
+        if(header){
+            free(header->source);
+            free(header->dest);
+            free(header->protocol_type);
+            free(header);
+        }
 
     }
 
@@ -128,6 +138,8 @@ char *returnEtherType(char *type){
 
     if((type[0] == 0x08 && type[1] == 0x00) || (type[0] == 0x08 && type[1] == 0xDD))
         strcpy(ether_type,"IP");
+    if(type[0] == 0x08 && type[1] == 0x06)
+        strcpy(ether_type,"ARP");
 
     return ether_type;
 
@@ -136,13 +148,14 @@ char *returnEtherType(char *type){
 
 struct PseudoHeader *processIPInformation(const char *data){
 
-
+    const unsigned char *total_length_bytes = data + 2;
     const unsigned char *TTL_bytes = data + 8;
     const unsigned char *protocol_bytes = TTL_bytes + 1;
     const unsigned char *checksum_bytes = protocol_bytes + 1;
     const unsigned char *source_bytes = checksum_bytes + 2;
     const unsigned char *destination_bytes = source_bytes + 4;
 
+    
 
     short int version = data[0];
     short int len = (version % 16) * 4;
@@ -175,7 +188,6 @@ struct PseudoHeader *processIPInformation(const char *data){
     memcpy(&address_2.s_addr,destination_bytes,16);
     char *destination = (char *)malloc(sizeof(char)*16);
     strcpy(destination,inet_ntoa(address_2));
-    
 
     printf("\tIP Header\n");
     printf("\t\tIP Version: %d\n",version);
@@ -200,7 +212,25 @@ struct PseudoHeader *processIPInformation(const char *data){
     free(source);
     free(destination);
 
+    //grab Total length field
+    //unsigned short
+    //ntohs
+    //network order in pseudo header
+    //host order when calculating checksum
+    //IP Total length -  len
+    //header->TCP_seg_length = IP Total length -  len
+
+    
+
     struct PseudoHeader *header = (struct PseudoHeader *)malloc(sizeof(struct PseudoHeader));
+
+    unsigned short int total_length;
+    unsigned short int total_length_user;
+    memcpy(&total_length,total_length_bytes,2);
+    total_length_user = ntohs(total_length);
+    header->TCP_seg_length_user = total_length_user - len;
+    header->TCP_seg_length = htons(header->TCP_seg_length_user);
+
     header->protocol_type = protocol_type;
     header->len = len;
     header->dest = (int *)malloc(sizeof(unsigned int));
@@ -292,58 +322,26 @@ void processTCPInformation(char *data, struct PseudoHeader *header){
     memcpy(&window,window_bytes,2);
     window = htons(window);
 
-    //unsigned short int *addr = (unsigned short int *) data;
-    //unsigned short checksum = in_cksum(addr,header->TCP_seg_length);
-
-    unsigned char *checking = (char *)malloc(sizeof(char)*(header->TCP_seg_length+12));
+    unsigned char *checking = (char *)malloc(sizeof(char)*(header->TCP_seg_length_user+12));
     memcpy(checking,header->source,4);
     memcpy(checking+4,header->dest,4);
     memcpy(checking+8,&header->fixed,1);
     memcpy(checking+9,&header->protocol,1);
-    //memcpy(checking+10,&header->TCP_seg_length,2);
-    //memcpy(checking+12,data,header->TCP_seg_length);
-
-   unsigned short int tcp_seg_length_net = htons(header->TCP_seg_length);
-   printf("tcp_seg_length_net==%u\n",tcp_seg_length_net);
-    printf("\n");
-    for(int i=0;i<14;i++){
-
-        printf(" 0x%02x ",checking[i]);
-
-    }
-    memcpy(checking + 10, &tcp_seg_length_net, 2);
-    printf("\n");
-    for(int i=0;i<14;i++){
-
-        printf(" 0x%02x ",checking[i]);
-
-    }
-    memcpy(checking + 12, data, header->TCP_seg_length);
-    printf("\n");
-    for(int i=0;i<14;i++){
-
-        printf(" 0x%02x ",checking[i]);
-
-    }
-    printf("\n");
-    
+    memcpy(checking+10,&header->TCP_seg_length,2);
+    memcpy(checking+12,data,header->TCP_seg_length_user);
 
     unsigned short int *addr = (unsigned short int *) checking;
-    unsigned short int checksum_result = in_cksum(addr, header->TCP_seg_length + 12);
-    printf("\n");
-    for(int i=0;i<14;i++){
-
-        printf(" 0x%02x ",checking[i]);
-
-    }
-    //char *checksum = (char *)malloc(sizeof(char)*2);
-    //memcpy(checksum,checksum_bytes,2);
-    
-
+    unsigned short int checksum_result = in_cksum(addr, header->TCP_seg_length_user+12);
 
     printf("\tTCP Header\n");
-    printf("\t\tSource Port:  %u\n",source_port);
-    printf("\t\tDest Port:  %u\n",destination_port);
+    if(source_port==80)
+        printf("\t\tSource Port:  HTTP\n");
+    else
+        printf("\t\tSource Port:  %u\n",source_port);
+    if(destination_port==80)
+        printf("\t\tDest Port:  HTTP\n");
+    else
+        printf("\t\tDest Port:  %u\n",destination_port);
     printf("\t\tSequence Number: %u\n",sequence_number);
     printf("\t\tACK Number: %u\n",ACK_number);
     printf("\t\tData Offset (bytes): %u\n",data_offset);
@@ -370,14 +368,83 @@ void processTCPInformation(char *data, struct PseudoHeader *header){
 
     printf("\t\tWindow Size: %u\n",window);
 
-    
-    printf("\n");
-
-    printf("\t\tchecksum_result==%u\n",checksum_result);
+    //printf("\t\tchecksum_result==%u\n",checksum_result);
     if(!checksum_result)
         printf("\t\tChecksum: Correct (0x%02x%02x)\n",checksum_bytes[0],checksum_bytes[1]);
     else
         printf("\t\tChecksum: Incorrect (0x%02x%02x)\n",checksum_bytes[0],checksum_bytes[1]);
 
+
+}
+
+void processICMPInformation(char *data){
+
+    printf("\tICMP Header\n");
+    if(data[0]==0)
+        printf("\t\tType: Reply\n");
+    else if(data[0] == 8)
+        printf("\t\tType: Request\n");
+
+}
+
+void processUDPInformation(char *data){
+
+    printf("\tUDP Header\n");
+    unsigned short int source_port;
+    unsigned short int dest_port;
+    memcpy(&source_port,data,2);
+    memcpy(&dest_port,data+2,2);
+    source_port = htons(source_port);
+    dest_port = htons(dest_port);
+
+    if(source_port!=53)
+        printf("\t\tSource Port:  %u\n",source_port);
+    else    
+        printf("\t\tSource Port:  DNS\n");
+
+    if(dest_port!=53)
+        printf("\t\tDest Port:  %u\n",dest_port);
+    else
+        printf("\t\tDest Port:  DNS\n");
+
+}
+
+void processARPInformation(char *data){
+
+    char *opcode_bytes = data + 6;
+    char *sender_mac = opcode_bytes + 2;
+    char *sender_ip = sender_mac + 6;
+    char *target_mac = sender_ip + 4;
+    char *target_ip = target_mac + 6;
+
+
+    unsigned short int opcode;
+    memcpy(&opcode,opcode_bytes,2);
+    opcode = ntohs(opcode);
+
+
+    struct in_addr sender_address;
+    struct in_addr target_address;
+
+    memcpy(&sender_address.s_addr,sender_ip,4);
+    memcpy(&target_address.s_addr,target_ip,4);
+
+    char *sender = malloc(sizeof(char)*16);
+    char *target = malloc(sizeof(char)*16);
+
+
+    strcpy(sender,inet_ntoa(sender_address));
+    strcpy(target,inet_ntoa(target_address));
+
+    printf("\tARP header\n");
+    if(opcode==1)
+        printf("\t\tOpcode: Request\n");
+    else if(opcode==2)
+        printf("\t\tOpcode: Reply\n");
+
+    printf("\t\tSender MAC: %s\n",ether_ntoa(sender_mac));
+    printf("\t\tSender IP: %s\n",sender);
+    printf("\t\tTarget MAC: %s\n",ether_ntoa(target_mac));
+    printf("\t\tTarget IP: %s\n\n",target);  
 
 }

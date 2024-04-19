@@ -221,7 +221,7 @@ Packet number: 7  Packet Len: 60
 		FIN Flag: No
 		ACK Flag: Yes
 		Window Size: 49680
-		Checksum: Incorrect (0x9dc2)
+		Checksum: Correct (0x9dc2)
 
 Packet number: 8  Packet Len: 686
 
@@ -285,7 +285,7 @@ Packet number: 9  Packet Len: 60
 		FIN Flag: No
 		ACK Flag: Yes
 		Window Size: 49680
-		Checksum: Incorrect (0x9b4a)
+		Checksum: Correct (0x9b4a)
 
 Packet number: 10  Packet Len: 438
 
@@ -477,7 +477,7 @@ Packet number: 15  Packet Len: 60
 		FIN Flag: No
 		ACK Flag: Yes
 		Window Size: 49680
-		Checksum: Incorrect (0x966a)
+		Checksum: Correct (0x966a)
 
 Packet number: 16  Packet Len: 790
 
