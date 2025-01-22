@@ -11,15 +11,20 @@
 #define CATCH_ALL_LENGTH 65535
 #define ETHER_OFFSET 14
 
+
 void processPackets(pcap_t *);
-char *returnEtherType(char *type);
+char *returnEtherType(const char *type);
 char *processEthernetInformation(const char *);
 struct PseudoHeader*processIPInformation(const char *);
 char *returnProtocolType(const char *);
-void processUDPInformation(char *);
-void processARPInformation(char *);
-void processICMPInformation(char *);
-void processTCPInformation(char *, struct PseudoHeader *);
+void processUDPInformation(const char *);
+void processARPInformation(const char *);
+void processICMPInformation(const char *);
+void processTCPInformation(const char *, struct PseudoHeader *);
+unsigned int getFirstNibble(char byte);
+unsigned int getSecondNibble(char byte);
+
+int premature = 0;
 
 struct OffsetType{
 
@@ -76,8 +81,9 @@ void processPackets(pcap_t *packets){
     const char *data = (char *)malloc(sizeof(char)*4096);
     while ((data = pcap_next(packets,packet_header)) != NULL){
 
-        if(packet_number>1)
+        if(packet_number>1 && !premature)
             printf("\n");
+        premature = 0;
 
         printf("Packet number: %d  Packet Len: %d\n\n",packet_number,packet_header->len);
         packet_number++;
@@ -98,6 +104,8 @@ void processPackets(pcap_t *packets){
                 processICMPInformation(data+header->len+ETHER_OFFSET);
             else if(!strcmp(header->protocol_type,"UDP"))
                 processUDPInformation(data+header->len+ETHER_OFFSET);
+            else    
+                premature = 1;
         }
         
         free(ether_type);
@@ -117,9 +125,9 @@ void processPackets(pcap_t *packets){
 char *processEthernetInformation(const char *data){
 
     
-    char *destination = data;
-    char *source = data+6;
-    char *type = data+12;
+    const struct ether_addr *destination = (struct ether_addr *) data;
+    const struct ether_addr *source = (struct ether_addr *) (data+6);
+    const char *type = data+12;
 
     char *ether_type = returnEtherType(type);
 
@@ -133,7 +141,7 @@ char *processEthernetInformation(const char *data){
 }
 
 
-char *returnEtherType(char *type){
+char *returnEtherType(const char *type){
 
 
     char *ether_type = (char *)malloc(sizeof(char)*10);
@@ -161,16 +169,16 @@ struct PseudoHeader *processIPInformation(const char *data){
 
     
 
-    short int version = data[0];
-    short int len = (version % 16) * 4;
-    version = (version - (len/4)) / 16;
-    version = (version < 0) ? 0 : version;
+    short int version = getFirstNibble(data[0]);
+    short int len = getSecondNibble(data[0]) * 4;
 
-
-    short int TOS_difserv = data[1];
-    short int TOS_ECN = TOS_difserv % 16;
+    /*short int TOS_difserv = getFirstNibble(data[1]);
+    short int TOS_ECN = getSecondNibble(data[1]);
     TOS_difserv -= TOS_ECN;
-    TOS_difserv = (TOS_difserv < 0) ? 0 : TOS_difserv;
+    TOS_difserv = (TOS_difserv < 0) ? 0 : TOS_difserv;*/
+
+    unsigned char TOS_difserv = (data[1] & 0b11111100) >> 2;
+    unsigned char TOS_ECN = (data[1] & 0b00000011);
 
 
     u_int32_t TTL = TTL_bytes[0];
@@ -189,8 +197,8 @@ struct PseudoHeader *processIPInformation(const char *data){
     char *source = (char *)malloc(sizeof(char)*4);
     strcpy(source,inet_ntoa(address));
 
-    memcpy(&address_2.s_addr,destination_bytes,16);
-    char *destination = (char *)malloc(sizeof(char)*16);
+    memcpy(&address_2.s_addr,destination_bytes,4);
+    char *destination = (char *)malloc(sizeof(char)*4);
     strcpy(destination,inet_ntoa(address_2));
 
     printf("\tIP Header\n");
@@ -198,8 +206,8 @@ struct PseudoHeader *processIPInformation(const char *data){
     printf("\t\tHeader Len (bytes): %d\n",len);
 
     printf("\t\tTOS subfields:\n");
-    printf("\t\t   Diffserv bits: %x\n",TOS_difserv);
-    printf("\t\t   ECN bits: %x\n",TOS_difserv);
+    printf("\t\t   Diffserv bits: %d\n",TOS_difserv);
+    printf("\t\t   ECN bits: %d\n",TOS_ECN);
 
     printf("\t\tTTL: %d\n",TTL);
 
@@ -272,7 +280,7 @@ char *returnProtocolType(const char *protocol_type_bytes){
             break;
         
         default:
-            strcpy(protocol_type, "error");
+            strcpy(protocol_type, "Unknown");
             break;
 
     }
@@ -282,15 +290,15 @@ char *returnProtocolType(const char *protocol_type_bytes){
 }
 
 
-void processTCPInformation(char *data, struct PseudoHeader *header){
+void processTCPInformation(const char *data, struct PseudoHeader *header){
 
-    unsigned char *destination_bytes = data + 2;
-    unsigned char *sequence_bytes = destination_bytes + 2;
-    unsigned char *ACK_bytes = sequence_bytes + 4;
-    unsigned char *offset_bytes = ACK_bytes + 4;
-    unsigned char *flag_bytes = offset_bytes + 1;
-    unsigned char *window_bytes = flag_bytes + 1;
-    unsigned char *checksum_bytes = window_bytes + 2;
+    const unsigned char *destination_bytes = data + 2;
+    const unsigned char *sequence_bytes = destination_bytes + 2;
+    const unsigned char *ACK_bytes = sequence_bytes + 4;
+    const unsigned char *offset_bytes = ACK_bytes + 4;
+    const unsigned char *flag_bytes = offset_bytes + 1;
+    const unsigned char *window_bytes = flag_bytes + 1;
+    const unsigned char *checksum_bytes = window_bytes + 2;
     
 
     unsigned short int source_port;
@@ -313,7 +321,9 @@ void processTCPInformation(char *data, struct PseudoHeader *header){
     ACK_number = htonl(ACK_number);
 
 
-    unsigned int data_offset = offset_bytes[0] / 4;
+    //unsigned int data_offset = offset_bytes[0] / 4;
+    //unsigned int data_offset = ((offset_bytes[0] >> 4) & 0x0F) * 4;
+    unsigned int data_offset = getFirstNibble(offset_bytes[0]) * 4;
 
 
     unsigned int ACK_flag = 0b00010000 & flag_bytes[0];
@@ -381,17 +391,19 @@ void processTCPInformation(char *data, struct PseudoHeader *header){
 
 }
 
-void processICMPInformation(char *data){
+void processICMPInformation(const char *data){
 
     printf("\tICMP Header\n");
     if(data[0]==0)
         printf("\t\tType: Reply\n");
     else if(data[0] == 8)
         printf("\t\tType: Request\n");
+    else
+        printf("\t\tType: %d\n",data[0]);
 
 }
 
-void processUDPInformation(char *data){
+void processUDPInformation(const char *data){
 
     printf("\tUDP Header\n");
     unsigned short int source_port;
@@ -413,13 +425,13 @@ void processUDPInformation(char *data){
 
 }
 
-void processARPInformation(char *data){
+void processARPInformation(const char *data){
 
-    char *opcode_bytes = data + 6;
-    char *sender_mac = opcode_bytes + 2;
-    char *sender_ip = sender_mac + 6;
-    char *target_mac = sender_ip + 4;
-    char *target_ip = target_mac + 6;
+    const char *opcode_bytes = data + 6;
+    const char *sender_mac = opcode_bytes + 2;
+    const char *sender_ip = sender_mac + 6;
+    const char *target_mac = sender_ip + 4;
+    const char *target_ip = target_mac + 6;
 
 
     unsigned short int opcode;
@@ -446,9 +458,19 @@ void processARPInformation(char *data){
     else if(opcode==2)
         printf("\t\tOpcode: Reply\n");
 
-    printf("\t\tSender MAC: %s\n",ether_ntoa(sender_mac));
+    printf("\t\tSender MAC: %s\n",ether_ntoa((struct ether_addr *) sender_mac));
     printf("\t\tSender IP: %s\n",sender);
-    printf("\t\tTarget MAC: %s\n",ether_ntoa(target_mac));
+    printf("\t\tTarget MAC: %s\n",ether_ntoa((struct ether_addr *) target_mac));
     printf("\t\tTarget IP: %s\n\n",target);  
 
+}
+
+unsigned int getFirstNibble(char byte){
+
+    return (unsigned int )((byte >> 4) & 0x0F);
+
+}
+
+unsigned int getSecondNibble(char byte) {
+    return byte & 0x0F;
 }
