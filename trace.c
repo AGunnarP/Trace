@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <pcap.h>
 #include <netinet/ether.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <string.h>
 
